@@ -53,7 +53,7 @@ void process_file(const char *name) {
     fread(buffer, fileLen, 1, file); // reads entire file into memory
     fclose(file);
 
-    char *new_png_name = malloc(strlen(name) + 5); // reserve space for filename + numbered counter
+    char *new_png_name = malloc(strlen(name) + 9); // reserve space for filename + numbered counter
 
     char png_counter_string[5];
     int png_counter = 1;
