@@ -38,16 +38,22 @@ void process_file(const char *name) {
 
     FILE *file = fopen(name, "rb");
 
+    if (file == NULL) {
+        fprintf(stderr, "Unable to open file %s.\n", name);
+        return;
+    }
+
+    // jump to the end of file - that gets file size in bytes
     fseek(file, 0, SEEK_END);
     const unsigned long fileLen = ftell(file);
-    fseek(file, 0, SEEK_SET);
 
+    fseek(file, 0, SEEK_SET);
     char *buffer = malloc(fileLen + 1);
 
-    fread(buffer, fileLen, 1, file);
+    fread(buffer, fileLen, 1, file); // reads entire file into memory
     fclose(file);
 
-    char *new_png_name = malloc(strlen(name) + 5);
+    char *new_png_name = malloc(strlen(name) + 5); // reserve space for filename + numbered counter
 
     char png_counter_string[5];
     int png_counter = 1;
@@ -76,24 +82,26 @@ void process_file(const char *name) {
                 return;
             }
 
-            int j = 8;
+            int j = 8; // bytes to skip ("icon" and 4 bytes of RIFF format header)
+
+            // read until next "icon" is found
             while (i + j + 4 <= fileLen) {
                 if (contains_icon(buffer, i + j + 1) == 1)
                     break;
                 if (j == 10)
-                    putc(0x01, png_image);
+                    putc(0x01, png_image); // some weird format hack, to research later
                 else
-                    putc(*(buffer + i + j), png_image);
+                    putc(buffer[i + j], png_image);
                 j++;
             }
             if (i + j <= fileLen)
-                putc(*(buffer + i + j), png_image);
+                putc(buffer[i + j], png_image);
             if (fileLen - i - j <= 3) {
-                putc(*(buffer + i + j + 1), png_image);
-                putc(*(buffer + i + j + 2), png_image);
+                putc(buffer[i + j + 1], png_image);
+                putc(buffer[i + j + 2], png_image);
             }
             fclose(png_image);
-            i += j;
+            i += j; // advance the outer loop so it doesn't rescan the same bytes
         }
     }
 
