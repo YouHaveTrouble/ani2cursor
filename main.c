@@ -4,8 +4,6 @@
 
 static void process_file(const char *name);
 
-static int contains_icon(const char *buffer, int start);
-
 static void write_cursor_conf(
     const char *baseName,
     unsigned long default_jif,
@@ -58,12 +56,12 @@ void process_file(const char *name) {
 
     char png_counter_string[5];
     int png_counter = 1;
-    unsigned long default_jif = 0;  // jifRate from anih (1 jiffy = 1/60 sec)
-    int num_steps = 0;              // cSteps from anih
-    int num_frames = 0;             // cFrames from anih
-    int rate_values[10000];         // per-step rates from "rate" chunk (jiffies)
-    int rate_count = 0;             // how many entries we found in "rate"
-    int seq_values[10000];
+    unsigned long default_jif = 0; // jifRate from anih (1 jiffy = 1/60 sec)
+    int num_steps = 0; // cSteps from anih
+    int num_frames = 0; // cFrames from anih
+    int *rate_values = NULL;
+    int rate_count = 0; // how many entries we found in "rate"
+    int *seq_values = NULL;
     int seq_count = 0;
 
     for (int i = 0; i <= fileLen; i++) {
@@ -82,32 +80,69 @@ void process_file(const char *name) {
             //   offset 4:  cFrames
             //   offset 8:  cSteps
             //   offset 28: jifRate   <-- what we want (1 jiffy = 1/60 sec)
-            const unsigned char *p = (const unsigned char *)(buffer + i + 8);
+            const unsigned char *p = (const unsigned char *) (buffer + i + 8);
             num_frames = p[4] | (p[5] << 8) | (p[6] << 16) | (p[7] << 24);
-            num_steps  = p[8] | (p[9] << 8) | (p[10] << 16) | (p[11] << 24);
+            num_steps = p[8] | (p[9] << 8) | (p[10] << 16) | (p[11] << 24);
             default_jif = p[28] | (p[29] << 8) | (p[30] << 16) | (p[31] << 24);
         }
 
-        // per step timing extraction
-        if (i + 12 <= fileLen
-    && memcmp(buffer + i, "seq ", 4) == 0   // note trailing space
-    && seq_count == 0) {
-            const unsigned char *p = (const unsigned char *)(buffer + i + 8);
-            const unsigned long seq_size = (unsigned char)buffer[i+4]
-                                   | ((unsigned char)buffer[i+5] << 8)
-                                   | ((unsigned char)buffer[i+6] << 16)
-                                   | ((unsigned char)buffer[i+7] << 24);
-            int num_seqs = seq_size / 4;
-            if (num_seqs > 10000) num_seqs = 10000;
-            for (int s = 0; s < num_seqs; s++) {
-                seq_values[s] = p[s*4] | (p[s*4+1] << 8)
-                              | (p[s*4+2] << 16) | (p[s*4+3] << 24);
+        // sequence parsing
+        if (i + 12 <= fileLen && memcmp(buffer + i, "seq ", 4) == 0 && seq_count == 0) {
+            const unsigned char *p = (const unsigned char *) (buffer + i + 8);
+            const unsigned long seq_size = (unsigned char) buffer[i + 4]
+                                           | ((unsigned char) buffer[i + 5] << 8)
+                                           | ((unsigned char) buffer[i + 6] << 16)
+                                           | ((unsigned char) buffer[i + 7] << 24);
+            const int num_seqs = (int) seq_size / 4;
+            if (num_seqs > 0) {
+                seq_values = malloc((size_t) num_seqs * sizeof(int));
+                if (!seq_values) {
+                    fprintf(stderr, "OOM allocating seq\n");
+                    free(fileName);
+                    free(buffer);
+                    free(new_png_name);
+                    free(cursor_conf_name);
+                    free(rate_values);
+                    return;
+                }
+                for (int s = 0; s < num_seqs; s++) {
+                    seq_values[s] = p[s * 4] | (p[s * 4 + 1] << 8)
+                                    | (p[s * 4 + 2] << 16) | (p[s * 4 + 3] << 24);
+                }
+                seq_count = num_seqs;
             }
-            seq_count = num_seqs;
-    }
+        }
+
+        // per step timing extraction
+        if (i + 12 <= fileLen && memcmp(buffer + i, "rate", 4) == 0 && rate_count == 0) {
+            const unsigned char *p = (const unsigned char *) (buffer + i + 8);
+            const unsigned long rate_size = (unsigned char) buffer[i + 4]
+                                            | ((unsigned char) buffer[i + 5] << 8)
+                                            | ((unsigned char) buffer[i + 6] << 16)
+                                            | ((unsigned char) buffer[i + 7] << 24);
+            const int num_rates = (int) rate_size / 4;
+            if (num_rates > 0) {
+                rate_values = malloc((size_t) num_rates * sizeof(int));
+                if (!rate_values) {
+                    fprintf(stderr, "OOM allocating rate\n");
+                    free(fileName);
+                    free(buffer);
+                    free(new_png_name);
+                    free(cursor_conf_name);
+                    free(seq_values);
+                    free(rate_values);
+                    return;
+                }
+                for (int r = 0; r < num_rates; r++) {
+                    rate_values[r] = p[r * 4] | (p[r * 4 + 1] << 8)
+                                     | (p[r * 4 + 2] << 16) | (p[r * 4 + 3] << 24);
+                }
+                rate_count = num_rates;
+            }
+        }
 
         // icon extraction
-        if (i + 4 <= fileLen && contains_icon(buffer, i) == 1) {
+        if (i + 4 <= fileLen && memcmp(buffer + i, "icon", 4) == 0) {
             sprintf(png_counter_string, "%d", png_counter);
             strcpy(new_png_name, fileName);
             strcat(new_png_name, png_counter_string);
@@ -127,7 +162,7 @@ void process_file(const char *name) {
 
             // read until next "icon" is found
             while (i + j + 4 <= fileLen) {
-                if (contains_icon(buffer, i + j + 1) == 1)
+                if (memcmp(buffer + i + j + 1, "icon", 4) == 0)
                     break;
                 if (j == 10)
                     putc(0x01, png_image); // some weird format hack, to research later
@@ -146,7 +181,7 @@ void process_file(const char *name) {
         }
     }
     printf("DEBUG: frames=%d steps=%d seq_count=%d rate_count=%d\n",
-       num_frames, num_steps, seq_count, rate_count);
+           num_frames, num_steps, seq_count, rate_count);
 
     if (num_steps > 0) {
         write_cursor_conf(fileName, default_jif, num_steps, rate_values, rate_count, seq_values, seq_count);
@@ -156,7 +191,7 @@ void process_file(const char *name) {
     printf("Frames: %d\n", num_frames);
     printf("Steps:  %d\n", num_steps);
     printf("Default rate: %lu jiffies (%.1f ms)\n",
-           default_jif, default_jif * 1000.0 / 60.0);
+           default_jif, (double) default_jif * 1000.0 / 60.0);
     if (rate_count > 0) {
         printf("Per-step rates (from 'rate' chunk):\n");
         for (int r = 0; r < rate_count; r++) {
@@ -168,9 +203,12 @@ void process_file(const char *name) {
     }
     printf("========================\n\n");
 
-    free(new_png_name);
-    free(buffer);
     free(fileName);
+    free(buffer);
+    free(new_png_name);
+    free(cursor_conf_name);
+    free(seq_values);
+    free(rate_values);
 }
 
 
@@ -205,13 +243,13 @@ static void write_cursor_conf(
 
     for (int step = 0; step < num_steps; step++) {
         const int jif = rate_count > 0 && step < rate_count
-                  ? rate_values[step]
-                  : (int) default_jif;
+                            ? rate_values[step]
+                            : (int) default_jif;
         const int ms = jif * 1000 / 60;
 
         const int frame = seq_count > 0 && step < seq_count
-            ? seq_values[step]
-            : step;
+                              ? seq_values[step]
+                              : step;
 
         char pngName[1024];
         char numStr[5];
@@ -228,5 +266,4 @@ static void write_cursor_conf(
     printf("Cursor config written to %s\n", confName);
 
     free(confName);
-
 }
