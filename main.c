@@ -2,6 +2,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+typedef struct {
+    int x;
+    int y;
+} point;
+
 static void process_file(const char *name);
 
 static void write_cursor_conf(
@@ -11,7 +16,9 @@ static void write_cursor_conf(
     const int *rate_values,
     int rate_count,
     const int *seq_values,
-    int seq_count
+    int seq_count,
+    point cursor_size,
+    point hotspot
 );
 
 int main(const int argc, char **argv) {
@@ -63,6 +70,8 @@ void process_file(const char *name) {
     int rate_count = 0; // how many entries we found in "rate"
     int *seq_values = NULL;
     int seq_count = 0;
+    point cursor_size = {.x = 32, .y = 32};
+    point hotspot = {.x = 0, .y = 0};
 
     for (int i = 0; i <= fileLen; i++) {
         if (png_counter == 9999) {
@@ -79,7 +88,7 @@ void process_file(const char *name) {
             //   offset 0:  cbSizeof  (should be 36)
             //   offset 4:  cFrames
             //   offset 8:  cSteps
-            //   offset 28: jifRate   <-- what we want (1 jiffy = 1/60 sec)
+            //   offset 28: jifRate
             const unsigned char *p = (const unsigned char *) (buffer + i + 8);
             num_frames = p[4] | (p[5] << 8) | (p[6] << 16) | (p[7] << 24);
             num_steps = p[8] | (p[9] << 8) | (p[10] << 16) | (p[11] << 24);
@@ -149,6 +158,18 @@ void process_file(const char *name) {
             strcat(new_png_name, ".png");
             png_counter++;
 
+            //cursor size and hotspot extraction. realistically this will be static so parsing it once is enough, but
+            //format itself DOES support per frame hotspot and cursor size
+            if (png_counter == 2 && i + 22 <= fileLen) {
+                const unsigned char *cur = (const unsigned char *)(buffer + i);
+                const int w = cur[14];
+                const int h = cur[15];
+                cursor_size.x  = w != 0 ? w : 32;
+                cursor_size.y = h != 0 ? h : 32;
+                hotspot.x = cur[18] | (cur[19] << 8);
+                hotspot.y = cur[20] | (cur[21] << 8);
+            }
+
             FILE *png_image = fopen(new_png_name, "wb");
             if (!png_image) {
                 fprintf(stderr, "Unable to open file %s.\n", new_png_name);
@@ -177,14 +198,12 @@ void process_file(const char *name) {
                 putc(buffer[i + j + 2], png_image);
             }
             fclose(png_image);
-            i += j; // advance the outer loop so it doesn't rescan the same bytes
+            i += j;
         }
     }
-    printf("DEBUG: frames=%d steps=%d seq_count=%d rate_count=%d\n",
-           num_frames, num_steps, seq_count, rate_count);
 
     if (num_steps > 0) {
-        write_cursor_conf(fileName, default_jif, num_steps, rate_values, rate_count, seq_values, seq_count);
+        write_cursor_conf(fileName, default_jif, num_steps, rate_values, rate_count, seq_values, seq_count, cursor_size, hotspot);
     }
 
     printf("\n=== Animation Timing ===\n");
@@ -212,17 +231,6 @@ void process_file(const char *name) {
 }
 
 
-/**
- * This always needs <code>i + 4 <= fileLen</code> so it doesn't read random bytes
- * @param buffer buffer to read from
- * @param start position to start from
- * @return true if found "icon"
- */
-int contains_icon(const char *buffer, const int start) {
-    return memcmp(buffer + start, "icon", 4) == 0;
-}
-
-
 static void write_cursor_conf(
     const char *baseName,
     const unsigned long default_jif,
@@ -230,7 +238,9 @@ static void write_cursor_conf(
     const int *rate_values,
     const int rate_count,
     const int *seq_values,
-    const int seq_count
+    const int seq_count,
+    const point cursor_size,
+    const point hotspot
 ) {
     char *confName = malloc(strlen(baseName) + 6);
     strcpy(confName, baseName);
@@ -259,7 +269,8 @@ static void write_cursor_conf(
         strcat(pngName, ".png");
 
         // size and hotspot are placeholders
-        fprintf(conf, "32\t0\t0\t%s\t%d\n", pngName, ms);
+        fprintf(conf, "%d\t%d\t%d\t%d\t%s\t%d\n",
+        cursor_size.x, cursor_size.y, hotspot.x, hotspot.y, pngName, ms);
     }
 
     fclose(conf);
