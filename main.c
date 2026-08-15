@@ -7,6 +7,14 @@ typedef struct {
     int y;
 } point;
 
+typedef struct {
+    int has_value;
+    point cursor_size;
+    point hotspot;
+    char pngName[1024];
+    int ms;
+} config_line;
+
 static void process_file(const char *name);
 
 static void write_cursor_conf(
@@ -161,10 +169,10 @@ void process_file(const char *name) {
             //cursor size and hotspot extraction. realistically this will be static so parsing it once is enough, but
             //format itself DOES support per frame hotspot and cursor size
             if (png_counter == 2 && i + 22 <= fileLen) {
-                const unsigned char *cur = (const unsigned char *)(buffer + i);
+                const unsigned char *cur = (const unsigned char *) (buffer + i);
                 const int w = cur[14];
                 const int h = cur[15];
-                cursor_size.x  = w != 0 ? w : 32;
+                cursor_size.x = w != 0 ? w : 32;
                 cursor_size.y = h != 0 ? h : 32;
                 hotspot.x = cur[18] | (cur[19] << 8);
                 hotspot.y = cur[20] | (cur[21] << 8);
@@ -203,7 +211,17 @@ void process_file(const char *name) {
     }
 
     if (num_steps > 0) {
-        write_cursor_conf(fileName, default_jif, num_steps, rate_values, rate_count, seq_values, seq_count, cursor_size, hotspot);
+        write_cursor_conf(
+            fileName,
+            default_jif,
+            num_steps,
+            rate_values,
+            rate_count,
+            seq_values,
+            seq_count,
+            cursor_size,
+            hotspot
+        );
     }
 
     printf("\n=== Animation Timing ===\n");
@@ -230,6 +248,18 @@ void process_file(const char *name) {
     free(rate_values);
 }
 
+/**
+ * Checks if frame data (except time) matches between 2 given frames
+ */
+static int same_frame(const config_line frame1, const config_line frame2) {
+    return frame1.has_value
+            && frame2.has_value
+            && frame1.cursor_size.x == frame2.cursor_size.x
+            && frame1.cursor_size.y == frame2.cursor_size.y
+            && frame1.hotspot.x == frame2.hotspot.x
+            && frame1.hotspot.y == frame2.hotspot.y
+            && strcmp(frame1.pngName, frame2.pngName) == 0;
+}
 
 static void write_cursor_conf(
     const char *baseName,
@@ -251,6 +281,8 @@ static void write_cursor_conf(
         fprintf(stderr, "Unable to write cursor config %s.\n", confName);
     }
 
+    config_line previous_line = {0};
+
     for (int step = 0; step < num_steps; step++) {
         const int jif = rate_count > 0 && step < rate_count
                             ? rate_values[step]
@@ -261,16 +293,38 @@ static void write_cursor_conf(
                               ? seq_values[step]
                               : step;
 
-        char pngName[1024];
-        char numStr[5];
+        char numStr[12];
         sprintf(numStr, "%d", frame + 1);
-        strcpy(pngName, baseName);
-        strcat(pngName, numStr);
-        strcat(pngName, ".png");
 
-        // size and hotspot are placeholders
+        config_line current_line;
+        current_line.has_value = 1;
+        current_line.cursor_size = cursor_size;
+        current_line.hotspot = hotspot;
+        strcpy(current_line.pngName, baseName);
+        strcat(current_line.pngName, numStr);
+        strcat(current_line.pngName, ".png");
+        current_line.ms = ms;
+
+        if (same_frame(previous_line, current_line)) {
+            previous_line.ms += current_line.ms;
+            continue;
+        }
+        if (previous_line.has_value) {
+            fprintf(conf, "%d\t%d\t%d\t%d\t%s\t%d\n",
+                    previous_line.cursor_size.x, previous_line.cursor_size.y,
+                    previous_line.hotspot.x, previous_line.hotspot.y,
+                    previous_line.pngName, previous_line.ms);
+        }
+        previous_line = current_line;
+        previous_line.has_value = 1;
+    }
+
+    // write the last line
+    if (previous_line.has_value) {
         fprintf(conf, "%d\t%d\t%d\t%d\t%s\t%d\n",
-        cursor_size.x, cursor_size.y, hotspot.x, hotspot.y, pngName, ms);
+                previous_line.cursor_size.x, previous_line.cursor_size.y,
+                previous_line.hotspot.x, previous_line.hotspot.y,
+                previous_line.pngName, previous_line.ms);
     }
 
     fclose(conf);
